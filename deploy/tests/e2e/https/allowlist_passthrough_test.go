@@ -36,10 +36,10 @@ func TestAllowListWithClusterPassthroughSuite(t *testing.T) {
 func (suite *AllowListWithClusterPassthroughSuite) Test_AllowList_With_ClusterPassthrough() {
 	// A second, unrelated ingress using ssl-passthrough. Its mere presence in
 	// the cluster flips haproxy.SSLPassthrough, which must not affect rule
-	// placement for other, non-passthrough ingresses. Left in place for the
-	// rest of the suite run; TearDownSuite deletes the whole test namespace
-	// (Test.Delete has no way to target this dynamic namespace, so a
-	// per-test kubectl delete here would silently no-op against the wrong one).
+	// placement for other, non-passthrough ingresses.
+	defer func() {
+		suite.Require().NoError(suite.test.Delete("config/passthrough-sidecar-delete.yaml"))
+	}()
 	passthroughData := tmplData{
 		Host: "passthrough-sidecar." + suite.test.GetNS() + ".test",
 		Port: "https",
