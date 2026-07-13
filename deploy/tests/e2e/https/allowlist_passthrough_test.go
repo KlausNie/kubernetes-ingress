@@ -17,6 +17,8 @@
 package https
 
 import (
+	"encoding/json"
+	"io"
 	"net/http"
 	"testing"
 
@@ -40,14 +42,45 @@ func (suite *AllowListWithClusterPassthroughSuite) Test_AllowList_With_ClusterPa
 	defer func() {
 		suite.Require().NoError(suite.test.Delete("config/passthrough-sidecar-delete.yaml"))
 	}()
+	sidecarHost := "passthrough-sidecar." + suite.test.GetNS() + ".test"
 	passthroughData := tmplData{
-		Host: "passthrough-sidecar." + suite.test.GetNS() + ".test",
+		Host: sidecarHost,
 		Port: "https",
 		IngAnnotations: []struct{ Key, Value string }{
 			{"ssl-passthrough", "'true'"},
 		},
 	}
 	suite.Require().NoError(suite.test.Apply("config/passthrough-sidecar.yaml.tmpl", suite.test.GetNS(), passthroughData))
+
+	// Confirm the sidecar's ssl-passthrough is genuinely active before relying
+	// on it as this test's precondition - mirrors passthrough_test.go's own
+	// Reach_Backend check. The echo backend only reports a TLS SNI when
+	// HAProxy relayed a raw passthrough connection instead of terminating
+	// TLS itself, so this can't pass unless SSLPassthrough actually flipped.
+	sidecarClient, err := e2e.NewHTTPSClient(sidecarHost)
+	suite.Require().NoError(err)
+	suite.Eventually(func() bool {
+		res, cls, err := sidecarClient.Do()
+		if res == nil {
+			suite.T().Log(err)
+			return false
+		}
+		defer cls()
+		body, err := io.ReadAll(res.Body)
+		if err != nil {
+			return false
+		}
+		type echoServerResponse struct {
+			TLS struct {
+				SNI string `json:"sni"`
+			} `json:"tls"`
+		}
+		response := &echoServerResponse{}
+		if err := json.Unmarshal(body, response); err != nil {
+			return false
+		}
+		return response.TLS.SNI == sidecarHost
+	}, e2e.WaitDuration, e2e.TickDuration, "expected the sidecar ssl-passthrough ingress to be active before testing the main ingress's allow-list")
 
 	// The ingress under test: allow-list only, no ssl-passthrough of its own.
 	// suite.client (created in BeforeTest) targets suite.tmplData.Host over HTTPS.
