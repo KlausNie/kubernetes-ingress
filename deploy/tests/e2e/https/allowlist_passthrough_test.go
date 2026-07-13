@@ -100,4 +100,24 @@ func (suite *AllowListWithClusterPassthroughSuite) Test_AllowList_With_ClusterPa
 		// denied - even though a coexisting ingress uses ssl-passthrough.
 		return res.StatusCode == http.StatusForbidden
 	}, e2e.WaitDuration, e2e.TickDuration, "expected HTTPS request to the non-passthrough ingress to be blocked by allow-list")
+
+	// Positive control on the same ingress/host/frontend: widen the allow-list
+	// to everyone and confirm the same client now gets through. FrontHTTPS is
+	// shared by every TLS-terminated ingress in the cluster, so proving the
+	// prior 403 alone doesn't rule out a regression that makes the deny
+	// unconditional (denies everyone) rather than correctly scoped.
+	suite.tmplData.IngAnnotations = []struct{ Key, Value string }{
+		{"allow-list", "0.0.0.0/0"},
+	}
+	suite.Require().NoError(suite.test.Apply("config/ingress.yaml.tmpl", suite.test.GetNS(), suite.tmplData))
+
+	suite.Eventually(func() bool {
+		res, cls, err := suite.client.Do()
+		if res == nil {
+			suite.T().Log(err)
+			return false
+		}
+		defer cls()
+		return res.StatusCode == http.StatusOK
+	}, e2e.WaitDuration, e2e.TickDuration, "expected HTTPS request to succeed once the allow-list is widened to everyone")
 }
